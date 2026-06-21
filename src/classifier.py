@@ -114,10 +114,11 @@ def train_classifier(X: pd.DataFrame, y: np.ndarray) -> tuple:
     """
     Trains and compares Random Forest and Support Vector Machine (SVM) models.
     Uses chronological split (first 80% train, last 20% test) to prevent temporal data leakage.
+    Applies class balancing and evaluates using Balanced Accuracy.
     """
     from sklearn.ensemble import RandomForestClassifier
     from sklearn.svm import SVC
-    from sklearn.metrics import classification_report, accuracy_score, confusion_matrix
+    from sklearn.metrics import classification_report, balanced_accuracy_score, confusion_matrix
     from sklearn.preprocessing import StandardScaler
     from sklearn.pipeline import Pipeline
 
@@ -130,37 +131,37 @@ def train_classifier(X: pd.DataFrame, y: np.ndarray) -> tuple:
     print(f"    Train size: {X_train.shape[0]} windows (label balance: {np.bincount(y_train)})")
     print(f"    Test size:  {X_test.shape[0]} windows (label balance: {np.bincount(y_test)})")
 
-    # 2. Train Random Forest
-    print("[*] Training Random Forest Classifier...")
-    rf = RandomForestClassifier(n_estimators=100, random_state=97)
+    # 2. Train Random Forest (balanced class weights)
+    print("[*] Training Random Forest Classifier (balanced weights)...")
+    rf = RandomForestClassifier(n_estimators=100, class_weight='balanced', random_state=97)
     rf.fit(X_train, y_train)
     y_pred_rf = rf.predict(X_test)
-    acc_rf = accuracy_score(y_test, y_pred_rf)
+    acc_rf = balanced_accuracy_score(y_test, y_pred_rf)
 
-    # 3. Train Support Vector Machine (SVM) with StandardScaler
-    print("[*] Training SVM Classifier (with scaling pipeline)...")
+    # 3. Train Support Vector Machine (SVM) with StandardScaler (balanced class weights)
+    print("[*] Training SVM Classifier (with scaling pipeline and balanced weights)...")
     svm_pipe = Pipeline([
         ('scaler', StandardScaler()),
-        ('svm', SVC(kernel='rbf', probability=True, random_state=97))
+        ('svm', SVC(kernel='rbf', class_weight='balanced', probability=True, random_state=97))
     ])
     svm_pipe.fit(X_train, y_train)
     y_pred_svm = svm_pipe.predict(X_test)
-    acc_svm = accuracy_score(y_test, y_pred_svm)
+    acc_svm = balanced_accuracy_score(y_test, y_pred_svm)
 
     # 4. Report metrics
     print("\n" + "="*20 + " Classifier Evaluation " + "="*20)
-    print(f"1. Random Forest Test Accuracy: {acc_rf:.4%}")
+    print(f"1. Random Forest Test Balanced Accuracy: {acc_rf:.4%}")
     print(classification_report(y_test, y_pred_rf, target_names=['Disrupted', 'Flow']))
     print("Random Forest Confusion Matrix:")
     print(confusion_matrix(y_test, y_pred_rf))
 
-    print(f"\n2. SVM Test Accuracy:          {acc_svm:.4%}")
+    print(f"\n2. SVM Test Balanced Accuracy:          {acc_svm:.4%}")
     print(classification_report(y_test, y_pred_svm, target_names=['Disrupted', 'Flow']))
     print("SVM Confusion Matrix:")
     print(confusion_matrix(y_test, y_pred_svm))
     print("="*63)
 
-    # Choose best model
+    # Choose best model based on Balanced Accuracy
     if acc_rf >= acc_svm:
         print("\n[*] Random Forest performed best. Selecting Random Forest.")
         return rf, {'type': 'Random Forest', 'accuracy': acc_rf}
@@ -196,7 +197,7 @@ if __name__ == "__main__":
         
         print("\n=== Pipeline Verification Successful ===")
         print(f"Model selected: {meta['type']}")
-        print(f"Test Accuracy:  {meta['accuracy']:.2%}")
+        print(f"Test Balanced Accuracy:  {meta['accuracy']:.2%}")
         
     except Exception as e:
         print(f"[!] Pipeline training failed: {e}")
