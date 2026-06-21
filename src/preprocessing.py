@@ -28,6 +28,10 @@ def preprocess_raw(raw: mne.io.Raw, ica_n_components: float = 0.99) -> mne.io.Ra
     mne.io.Raw
         The preprocessed, clean, and interpolated EEG data.
     """
+    # Set standard 10-20 montage to provide electrode coordinates (required by mne-icalabel)
+    print("[*] Setting standard 10-20 montage for channel coordinates...")
+    raw.set_montage('standard_1020', on_missing='ignore')
+
     # 1. Identify bad channels
     bads = raw.info['bads']
     print(f"[*] Bad channels identified in dataset: {bads}")
