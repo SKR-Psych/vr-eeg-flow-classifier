@@ -100,16 +100,17 @@ def preprocess_raw(raw: mne.io.Raw, ica_n_components: float = 0.99) -> mne.io.Ra
         
         print("\nComponent classification results:")
         for idx, (lbl, prob) in enumerate(zip(labels, probabilities)):
-            max_prob = prob[np.argmax(prob)]
-            print(f"  - IC {idx:02d}: {lbl:<10} (p={max_prob:.3f})")
+            print(f"  - IC {idx:02d}: {lbl:<10} (p={prob:.3f})")
             
-        # Target 'eye' and 'muscle' components for exclusion
+        # Target 'eye' (eye blink) and 'muscle' (muscle artifact) components for exclusion
         for idx, lbl in enumerate(labels):
-            if lbl in ('eye', 'muscle'):
+            if 'eye' in lbl or 'muscle' in lbl:
                 icalabel_exclude.append(idx)
         print(f"[*] mne-icalabel flagged component indices: {icalabel_exclude}")
     except Exception as e:
         print(f"[!] mne-icalabel classification skipped/failed: {e}")
+        import traceback
+        traceback.print_exc()
 
     # Combine exclusions
     exclude_components = list(set(eog_exclude + icalabel_exclude))
