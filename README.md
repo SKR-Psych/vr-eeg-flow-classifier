@@ -25,14 +25,19 @@ The ultimate long-term goal of this project is to create a real-time, closed-loo
 
 ## Getting Started
 
-### 1. Test Dataset
+### 1. Test Dataset & Setup
 To develop and validate the pipeline, we test our scripts on the open-source BIDS 64-channel VR Reach-to-Object dataset (`ds003846`) available on OpenNeuro. 
-*   Cloned repository containing the dataset details: `https://github.com/SKR-Psych/ds003846`
 
-### 2. Setup (Prototyping Environment)
-Install the core Python dependencies for BIDS loading and signal processing:
-```bash
-pip install mne mne-bids numpy scipy scikit-learn pyfire
-```
+The raw dataset is extremely large (~11.4 GB) and is ignored by Git (`data/` is added to `.gitignore`). To set up the data locally:
+
+1. Install the dataset download client and required python packages:
+   ```bash
+   pip install openneuro-py mne mne-bids numpy scipy scikit-learn pyfire
+   ```
+
+2. Download the dataset to the local `data/ds003846` directory:
+   ```bash
+   python -m openneuro download --dataset=ds003846 --tag=2.0.2 --target-dir=data/ds003846
+   ```
 
 *(Further setup instructions and Rust build steps will be added as code development begins.)*

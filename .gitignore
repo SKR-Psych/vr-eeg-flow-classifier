@@ -1,0 +1,25 @@
+# Dataset (extremely large, do not commit)
+data/
+
+# Python caching and environments
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.env
+.venv/
+venv/
+env/
+.pytest_cache/
+.ipynb_checkpoints/
+
+# Rust build artifacts
+target/
+Cargo.lock
+
+# IDE and OS files
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+*.log
