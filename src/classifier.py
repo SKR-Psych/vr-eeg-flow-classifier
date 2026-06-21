@@ -160,7 +160,7 @@ def train_classifier(X: pd.DataFrame, y: np.ndarray, groups: np.ndarray = None) 
             # SVM Pipeline
             svm_pipe = Pipeline([
                 ('scaler', StandardScaler()),
-                ('svm', SVC(kernel='rbf', class_weight='balanced', probability=True, random_state=97))
+                ('svm', SVC(kernel='rbf', class_weight='balanced', probability=False, random_state=97))
             ])
             svm_pipe.fit(X_train, y_train)
             y_pred_svm = svm_pipe.predict(X_test)
@@ -181,7 +181,7 @@ def train_classifier(X: pd.DataFrame, y: np.ndarray, groups: np.ndarray = None) 
         
         svm_final_pipe = Pipeline([
             ('scaler', StandardScaler()),
-            ('svm', SVC(kernel='rbf', class_weight='balanced', probability=True, random_state=97))
+            ('svm', SVC(kernel='rbf', class_weight='balanced', probability=False, random_state=97))
         ])
         svm_final_pipe.fit(X, y)
         
@@ -213,7 +213,7 @@ def train_classifier(X: pd.DataFrame, y: np.ndarray, groups: np.ndarray = None) 
         print("[*] Training SVM Classifier (with scaling pipeline and balanced weights)...")
         svm_pipe = Pipeline([
             ('scaler', StandardScaler()),
-            ('svm', SVC(kernel='rbf', class_weight='balanced', probability=True, random_state=97))
+            ('svm', SVC(kernel='rbf', class_weight='balanced', probability=False, random_state=97))
         ])
         svm_pipe.fit(X_train, y_train)
         y_pred_svm = svm_pipe.predict(X_test)
