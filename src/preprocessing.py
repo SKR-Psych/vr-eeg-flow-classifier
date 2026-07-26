@@ -66,15 +66,24 @@ def preprocess_raw(raw: mne.io.Raw, ica_n_components: float = 0.99) -> mne.io.Ra
     # 4. Set up and fit ICA
     print(f"[*] Initializing ICA (n_components={ica_n_components})...")
     # Using 'infomax' with extended=True (more robust for eye and muscle artifacts)
-    ica = ICA(
-        n_components=ica_n_components, 
-        method='infomax', 
-        fit_params=dict(extended=True), 
-        random_state=97
-    )
-    
-    print("[*] Fitting ICA (this might take a few seconds)...")
-    ica.fit(raw_ica_fit, verbose=False)
+    try:
+        ica = ICA(
+            n_components=ica_n_components, 
+            method='infomax', 
+            fit_params=dict(extended=True), 
+            random_state=97
+        )
+        ica.fit(raw_ica_fit, verbose=False)
+    except Exception as e:
+        print(f"[!] ICA fit with n_components={ica_n_components} failed ({e}). Retrying with n_components=0.95...")
+        ica = ICA(
+            n_components=0.95, 
+            method='infomax', 
+            fit_params=dict(extended=True), 
+            random_state=97
+        )
+        ica.fit(raw_ica_fit, verbose=False)
+        
     print(f"[*] ICA fit completed. Extracted {ica.n_components_} components.")
 
     # 5. Detect eye components via EOG correlation

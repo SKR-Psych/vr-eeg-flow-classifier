@@ -16,10 +16,19 @@ The ultimate long-term goal of this project is to create a real-time, closed-loo
 
 ## Directory Structure
 
-*   [biomarker_plan.md](biomarker_plan.md): The scientific blueprint outlining the specific EEG biomarkers (Theta, SMR, Hemispheric Asymmetry, Shannon Entropy, and Network Connectivity), how they are calculated, and references to the source literature.
-*   [ai_instructions.md](ai_instructions.md): A technical guide for AI coding assistants (like Cursor, Claude, or Gemini) to understand project constraints, success criteria, and code style.
-*   `src/`: (To be created) Python prototyping scripts and Rust-optimized signal processing libraries.
-*   `data/`: (To be created) Local directories to store test dataset folders (e.g., BIDS datasets from OpenNeuro).
+*   [biomarker_plan.md](biomarker_plan.md): Scientific blueprint outlining the specific EEG biomarkers (Theta, SMR, Hemispheric Asymmetry, Shannon Entropy, and Network Connectivity).
+*   [technical_roadmap.md](technical_roadmap.md): Software engineering, signal processing, and ML roadmap for system integration.
+*   [goofi_integration.md](goofi_integration.md): Architecture and Python code template for packaging the classifier into `goofi-pipe`.
+*   [flow_prediction_evaluation.ipynb](flow_prediction_evaluation.ipynb): Baseline evaluation report and scientific critique of offline performance.
+*   `src/`: Core Python modules:
+    *   `loader.py`: Ingestion of BIDS 64-channel EEG raw data (`ds003846`).
+    *   `preprocessing.py`: Rank-safe 0.5–45 Hz filtering, 10–20 montage setup, and `mne-icalabel` ICA artifact removal.
+    *   `features.py`: Calculation of the 14 continuous EEG biomarkers across sliding windows.
+    *   `classifier.py`: Classifier training (Random Forest & SVM) with chronological splitting and GroupKFold CV.
+    *   `batch_extract.py`: Parallel feature extraction across all dataset subjects and sessions.
+    *   `evaluate_all.py`: Multi-subject evaluation and export of calibrated `.joblib` models.
+    *   `predict.py`: Simulated real-time streaming pipeline achieving sub-100ms latency (~82ms).
+*   `data/`: Local storage for dataset files and trained model derivatives (`data/ds003846/derivatives/`).
 
 ---
 
