@@ -45,6 +45,86 @@ def calculate_relative_power(psds: np.ndarray, freqs: np.ndarray, fmin: float, f
     total_power[total_power == 0] = 1.0
     return band_power / total_power
 
+def calculate_1f_slope(psds: np.ndarray, freqs: np.ndarray, fmin: float = 1.0, fmax: float = 40.0) -> float:
+    """
+    Fits log-log linear slope (1/f spectral exponent) to Welch PSD array.
+    """
+    valid_idx = (freqs >= fmin) & (freqs <= fmax) & (freqs > 0)
+    if not np.any(valid_idx):
+        return 0.0
+    log_freqs = np.log10(freqs[valid_idx])
+    mean_psd = np.mean(psds[:, valid_idx], axis=0)
+    log_psd = np.log10(np.maximum(mean_psd, 1e-12))
+    
+    # Linear fit: log_psd = slope * log_freqs + intercept
+    slope, _ = np.polyfit(log_freqs, log_psd, 1)
+    return float(-slope)  # Exponent chi (steeper = higher chi)
+
+def calculate_longrange_coherence(window_data: np.ndarray, sfreq: float, idx1: int, idx2: int, fmin: float, fmax: float) -> float:
+    """
+    Computes spectral coherence between two channels in a specified frequency band.
+    """
+    from scipy.signal import coherence
+    f, cxy = coherence(window_data[idx1], window_data[idx2], fs=sfreq, nperseg=int(sfreq))
+    band_idx = (f >= fmin) & (f <= fmax)
+    if not np.any(band_idx):
+        return 0.0
+    return float(np.mean(cxy[band_idx]))
+
+def calculate_pac_beta_gamma(phase_beta: np.ndarray, amp_gamma: np.ndarray) -> float:
+    """
+    Computes Mean Vector Length (MVL) Phase-Amplitude Coupling between Beta phase and Gamma amplitude.
+    """
+    if len(phase_beta) == 0 or len(amp_gamma) == 0:
+        return 0.0
+    # Normalize amplitude
+    amp_norm = amp_gamma / (np.mean(amp_gamma) + 1e-8)
+    mvl = np.abs(np.mean(amp_norm * np.exp(1j * phase_beta)))
+    return float(mvl)
+
+def calculate_leapd_index(window_data: np.ndarray, indices: list) -> float:
+    """
+    Computes LEAPD index: geometric mean of Linear Predictive Coding (LPC) spectral envelope energies across ROI channels.
+    """
+    if not indices:
+        return 0.0
+    energies = []
+    for idx in indices:
+        signal = window_data[idx]
+        std_val = np.std(signal)
+        if std_val < 1e-8:
+            energies.append(1e-6)
+            continue
+        z_sig = (signal - np.mean(signal)) / std_val
+        # Autocorrelation for LPC order 8
+        autocorr = np.correlate(z_sig, z_sig, mode='full')
+        mid = len(z_sig) - 1
+        r = autocorr[mid:mid+9]
+        if r[0] == 0:
+            energies.append(1e-6)
+        else:
+            # Levinson-Durbin prediction error power
+            e = r[0]
+            for i in range(1, len(r)):
+                e *= (1.0 - (r[i]/max(r[0], 1e-6))**2)
+            energies.append(max(float(e), 1e-6))
+    
+    # Geometric mean
+    log_mean = np.mean(np.log(np.maximum(energies, 1e-6)))
+    return float(np.exp(log_mean))
+
+def calculate_alpha_nonlinearity(signal: np.ndarray) -> float:
+    """
+    Estimates non-linearity (L-index / Sample Entropy surrogate) of alpha signal via high-order moment asymmetry.
+    """
+    std_val = np.std(signal)
+    if std_val < 1e-8:
+        return 0.0
+    z_sig = (signal - np.mean(signal)) / std_val
+    skewness = np.mean(z_sig**3)
+    kurtosis = np.mean(z_sig**4) - 3.0
+    return float(np.sqrt(skewness**2 + (kurtosis/4.0)**2))
+
 def extract_epoch_features(raw: mne.io.Raw, window_len: float = 2.0, step: float = 2.0) -> pd.DataFrame:
     """
     Segments raw EEG data into sliding windows and extracts flow-related biomarkers.
@@ -84,7 +164,7 @@ def extract_epoch_features(raw: mne.io.Raw, window_len: float = 2.0, step: float
     left_asym_indices = [ch_names.index(ch) for ch in left_asym_channels if ch in ch_names]
     right_asym_indices = [ch_names.index(ch) for ch in right_asym_channels if ch in ch_names]
     
-    entropy_channels = ['AF7', 'AF8']
+    entropy_channels = ['AF7', 'AF8', 'Fp1', 'Fp2']
     entropy_indices = [ch_names.index(ch) for ch in entropy_channels if ch in ch_names]
     
     frontal_plv_channels = ['F3', 'F4', 'Fz']
@@ -92,27 +172,24 @@ def extract_epoch_features(raw: mne.io.Raw, window_len: float = 2.0, step: float
     frontal_plv_indices = [ch_names.index(ch) for ch in frontal_plv_channels if ch in ch_names]
     parietal_plv_indices = [ch_names.index(ch) for ch in parietal_plv_channels if ch in ch_names]
 
-    # Precompute instantaneous phases on the entire continuous raw data to protect against edge transients
-    print("[*] Pre-computing Hilbert phases for Theta (4-8 Hz)...")
-    raw_theta = raw.copy().filter(
-        l_freq=4.0, h_freq=8.0, 
-        method='iir', iir_params=dict(order=4, ftype='butter'), 
-        phase='zero', verbose=False
-    )
-    # hilbert operates along the last axis by default (samples)
-    analytic_theta = hilbert(raw_theta.get_data())
-    phase_theta = np.angle(analytic_theta)
-    del raw_theta, analytic_theta  # Free memory
-    
-    print("[*] Pre-computing Hilbert phases for Alpha (8-12 Hz)...")
-    raw_alpha = raw.copy().filter(
-        l_freq=8.0, h_freq=12.0, 
-        method='iir', iir_params=dict(order=4, ftype='butter'), 
-        phase='zero', verbose=False
-    )
-    analytic_alpha = hilbert(raw_alpha.get_data())
-    phase_alpha = np.angle(analytic_alpha)
-    del raw_alpha, analytic_alpha  # Free memory
+    # Precompute instantaneous phases & amplitudes for PAC & Connectivity
+    print("[*] Pre-computing Hilbert phases & amplitudes for Theta, Alpha, Beta, Gamma...")
+    raw_theta = raw.copy().filter(4.0, 8.0, method='iir', iir_params=dict(order=4, ftype='butter'), phase='zero', verbose=False)
+    phase_theta = np.angle(hilbert(raw_theta.get_data()))
+    del raw_theta
+
+    raw_alpha = raw.copy().filter(8.0, 12.0, method='iir', iir_params=dict(order=4, ftype='butter'), phase='zero', verbose=False)
+    data_alpha = raw_alpha.get_data()
+    phase_alpha = np.angle(hilbert(data_alpha))
+    del raw_alpha
+
+    raw_beta = raw.copy().filter(12.0, 30.0, method='iir', iir_params=dict(order=4, ftype='butter'), phase='zero', verbose=False)
+    phase_beta = np.angle(hilbert(raw_beta.get_data()))
+    del raw_beta
+
+    raw_gamma = raw.copy().filter(30.0, 45.0, method='iir', iir_params=dict(order=4, ftype='butter'), phase='zero', verbose=False)
+    amp_gamma = np.abs(hilbert(raw_gamma.get_data()))
+    del raw_gamma
 
     data_list = []
     
@@ -129,48 +206,75 @@ def extract_epoch_features(raw: mne.io.Raw, window_len: float = 2.0, step: float
         
         features = {'timestamp': timestamp}
         
-        # 1. Frontal Midline Theta (Fm Theta)
+        # Band powers across all channels
+        delta_p = calculate_relative_power(psds, freqs, 0.5, 4.0)
+        theta_p = calculate_relative_power(psds, freqs, 4.0, 8.0)
+        alpha_p = calculate_relative_power(psds, freqs, 8.0, 12.0)
+        beta_p  = calculate_relative_power(psds, freqs, 12.0, 30.0)
+        gamma_p = calculate_relative_power(psds, freqs, 30.0, 45.0)
+
+        # 1. Frontal Midline Theta (Fm Theta) & Global Ratios
         if fmt_indices:
-            theta_powers = calculate_relative_power(psds, freqs, 4.0, 8.0)
-            features['fm_theta'] = float(np.mean(theta_powers[fmt_indices]))
+            features['fm_theta'] = float(np.mean(theta_p[fmt_indices]))
+            features['fmt_alpha_theta_ratio'] = float(np.mean(alpha_p[fmt_indices]) / max(np.mean(theta_p[fmt_indices]), 1e-6))
+            features['fmt_alpha_beta_ratio']  = float(np.mean(alpha_p[fmt_indices]) / max(np.mean(beta_p[fmt_indices]), 1e-6))
+            features['fmt_delta_theta_ratio'] = float(np.mean(delta_p[fmt_indices]) / max(np.mean(theta_p[fmt_indices]), 1e-6))
             
-        # 2. SMR Alpha and Beta over Motor Cortex
+        # 2. SMR Alpha & Beta over Motor Cortex + PAC
         for idx in smr_indices:
             ch_name = ch_names[idx].lower()
-            ch_psd = psds[idx:idx+1, :]
-            features[f'smr_alpha_{ch_name}'] = float(calculate_relative_power(ch_psd, freqs, 8.0, 12.0)[0])
-            features[f'smr_beta_{ch_name}'] = float(calculate_relative_power(ch_psd, freqs, 12.0, 30.0)[0])
+            features[f'smr_alpha_{ch_name}'] = float(alpha_p[idx])
+            features[f'smr_beta_{ch_name}']  = float(beta_p[idx])
+            features[f'smr_gamma_{ch_name}'] = float(gamma_p[idx])
             
-        # 3. Hemispheric Beta Power Asymmetry
+            # Beta -> Gamma PAC over sensorimotor electrode
+            pac_val = calculate_pac_beta_gamma(phase_beta[idx, start:end], amp_gamma[idx, start:end])
+            features[f'pac_beta_gamma_{ch_name}'] = pac_val
+            
+            # Alpha band non-linearity (L-index)
+            alpha_win_sig = data_alpha[idx, start:end]
+            features[f'lindex_alpha_{ch_name}'] = calculate_alpha_nonlinearity(alpha_win_sig)
+            
+        # 3. Hemispheric Beta & Gamma Power Asymmetry
         if left_asym_indices and right_asym_indices:
-            left_beta = np.mean(calculate_relative_power(psds, freqs, 12.0, 30.0)[left_asym_indices])
-            right_beta = np.mean(calculate_relative_power(psds, freqs, 12.0, 30.0)[right_asym_indices])
+            left_beta = np.mean(beta_p[left_asym_indices])
+            right_beta = np.mean(beta_p[right_asym_indices])
             denom = left_beta + right_beta
             features['beta_asymmetry'] = float((left_beta - right_beta) / denom if denom > 0 else 0.0)
-            
-        # 4. Prefrontal Shannon Entropy
+
+            left_gamma = np.mean(gamma_p[left_asym_indices])
+            right_gamma = np.mean(gamma_p[right_asym_indices])
+            denom_g = left_gamma + right_gamma
+            features['gamma_asymmetry'] = float((left_gamma - right_gamma) / denom_g if denom_g > 0 else 0.0)
+
+        # 4. Prefrontal Shannon Entropy & LEAPD Index
         for idx in entropy_indices:
             ch_name = ch_names[idx].lower()
             features[f'entropy_{ch_name}'] = calculate_shannon_entropy(window_data[idx])
             
-        # 5. Frontal-Parietal Connectivity (PLV)
+        features['leapd_lpc_index'] = calculate_leapd_index(window_data, entropy_indices + fmt_indices)
+
+        # 5. 1/f Spectral Slope (Aperiodic Exponent)
+        features['spectral_slope_1f'] = calculate_1f_slope(psds, freqs)
+
+        # 6. Frontal-Parietal Connectivity (PLV) & Long-Range Coherence
         if frontal_plv_indices and parietal_plv_indices:
-            # Theta PLV
-            theta_plvs = []
-            for f_idx in frontal_plv_indices:
-                for p_idx in parietal_plv_indices:
-                    val = calculate_plv(phase_theta[f_idx, start:end], phase_theta[p_idx, start:end])
-                    theta_plvs.append(val)
+            # Theta & Alpha PLV
+            theta_plvs = [calculate_plv(phase_theta[f_idx, start:end], phase_theta[p_idx, start:end]) for f_idx in frontal_plv_indices for p_idx in parietal_plv_indices]
+            alpha_plvs = [calculate_plv(phase_alpha[f_idx, start:end], phase_alpha[p_idx, start:end]) for f_idx in frontal_plv_indices for p_idx in parietal_plv_indices]
             features['plv_theta'] = float(np.mean(theta_plvs))
-            
-            # Alpha PLV
-            alpha_plvs = []
+            features['plv_alpha'] = float(np.mean(alpha_plvs))
+
+            # Long range coherence (e.g., F3 to P4, F4 to P3)
+            coh_beta_list = []
+            coh_gamma_list = []
             for f_idx in frontal_plv_indices:
                 for p_idx in parietal_plv_indices:
-                    val = calculate_plv(phase_alpha[f_idx, start:end], phase_alpha[p_idx, start:end])
-                    alpha_plvs.append(val)
-            features['plv_alpha'] = float(np.mean(alpha_plvs))
-            
+                    coh_beta_list.append(calculate_longrange_coherence(window_data, sfreq, f_idx, p_idx, 12.0, 30.0))
+                    coh_gamma_list.append(calculate_longrange_coherence(window_data, sfreq, f_idx, p_idx, 30.0, 45.0))
+            features['longrange_beta_coherence'] = float(np.mean(coh_beta_list))
+            features['longrange_gamma_coherence'] = float(np.mean(coh_gamma_list))
+
         data_list.append(features)
         
     return pd.DataFrame(data_list)
