@@ -32,22 +32,32 @@ This document outlines the software engineering, signal processing, and machine 
 
 ## Part 2: Medium-to-Long Term Technical Development (Months 3+)
 
-### 1. Multi-Modal Neural Network Architecture (GNNs + CNNs)
-*   **Objective:** Upgrade from classical machine learning (SVM/RF) to deep learning models that process the spatial and topological features of the brain.
-*   **GNN Connectivity modeling:**
-    *   Map the 64 EEG channels as nodes in a graph.
-    *   Calculate dynamic functional connectivity matrices (e.g., Phase Locking Value in Theta/Alpha) to serve as weighted edges between nodes.
-    *   Train a Graph Neural Network (GNN) to classify flow states based on the topological synchronization of the brain.
-*   **CNN Spatial Modeling:**
-    *   Convert power spectral densities into 2D topographical maps (topomaps).
-    *   Train a Convolutional Neural Network (CNN) to extract spatial patterns of alpha blocking and frontal theta activity.
+### 1. Shapley Value Feature Attribution & Multi-Biomarker Optimization (Phase 4 Validation)
+*   **Objective:** Leverage cooperative game theory (SHAP) to explain biomarker contributions and prune feature noise.
+*   **37-Biomarker Discovery:**
+    *   **`leapd_lpc_index` (LEAPD LPC-based spectral envelope index):** Identified as the **#1 single most predictive scalar biomarker** ($|\Phi| = 0.0202$, 4.9% cohort contribution).
+    *   **Sensorimotor Rhythms (`smr_alpha_c4`, `smr_gamma_cp3/c3`):** Key motor automation and execution signatures over motor cortex C3/C4 (11.6% combined contribution).
+    *   **Prefrontal Entropy (`entropy_fp2`, `entropy_af8`) & 1/f Spectral Slope (`spectral_slope_1f`):** Quantify cognitive workload, attention regularization, and $E/I$ balance.
+*   **Shapley Biomarker Pruning:** Filtering traditional ML feature sets to top Shapley-attributed biomarkers boosted classical model accuracy from **58.42% to 60.40%** (+1.98% gain).
+*   **Shapley Composite Biomarker Index (SCBI):** Synthesized a 1D interpretable composite index score for real-time tracking:
+    $$SCBI_i = \sum_{j \in \text{Top-K}} w_j \cdot z(X_{i,j})$$
 
-### 2. Reinforcement Learning (RL) Adaptive Controller
+### 2. Hybrid Shapley-Deep Learning Attention Architecture (Shapley + EEGNet / GNN)
+*   **Objective:** Combine the high predictive accuracy of deep neural networks (**91.87%**) with 100% scientific explainability.
+*   **Shapley-Constrained EEGNet:**
+    *   Inject cohort-wide Shapley value weights $|\Phi_j|$ as pre-trained spatial attention priors into EEGNet's depthwise spatial convolution layer.
+    *   Prevents spatial overfitting and ensures the deep neural network attends to neurophysiologically validated electrodes (e.g., Fz, FCz, C3, C4).
+*   **Shapley Graph Attention Networks (GAT):**
+    *   Use Shapley attributions to dynamically initialize node attention weights in the Spatial-Temporal Graph Neural Network (S-T GNN).
+    *   Weight graph edges using Phase Locking Value (PLV) and long-range coherence ($\beta/\gamma$) derived from Shapley ranking.
+
+### 3. Reinforcement Learning (RL) Adaptive Controller & Real-Time VR Neurofeedback
 *   **Objective:** Develop the active "neuro-symbiotic" layer where the VR game difficulty adapts dynamically to maintain optimal flow.
-*   **Tasks:**
-    *   Implement a Reinforcement Learning agent (e.g., Q-learning or Deep Q-Networks) in Python that communicates with the Unity VR environment.
-    *   **State Space ($S$):** The smoothed probability of Flow $P(\text{Flow}_t)$ and motor performance metrics (reaching speed, accuracy, jitter).
-    *   **Action Space ($A$):** Modifications to game parameters (adjust target sizes, alter speed, modulate electromyostimulation (EMS) feedback strength, change visual spacing).
-    *   **Reward Function ($R$):** Design the reward to maximize the duration of the flow state:
+*   **Real-Time VR Stream Integration:**
+    *   Stream `leapd_lpc_index` and `smr_alpha_c4` live into `goofi-pipe` via Lab Streaming Layer (LSL).
+*   **Reinforcement Learning Agent (DQN):**
+    *   Implement a Deep Q-Network (DQN) agent in Python communicating with Unity VR via sockets.
+    *   **State Space ($S$):** The smoothed probability of Flow $P(\text{Flow}_t)$, SCBI score, and motor performance metrics.
+    *   **Action Space ($A$):** Real-time task modifications (adjusting target sizes, reach velocities, electromyostimulation (EMS) feedback, and visual clutter).
+    *   **Reward Function ($R$):** Designed to maximize sustained flow duration while penalizing abrupt difficulty changes:
         $$R_t = P(\text{Flow}_t) - c \cdot \Delta D_t$$
-        *(where $\Delta D_t$ penalizes large, jarring difficulty changes to maintain sensory immersion).*
