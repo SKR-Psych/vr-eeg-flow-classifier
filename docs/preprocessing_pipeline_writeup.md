@@ -174,5 +174,64 @@ The preprocessing pipeline includes self-verifying checks:
 
 ---
 
+## 6. Alignment with the Flow Biomarkers Plan
+
+Every preprocessing decision was directly tailored to ensure accurate, artifact-free extraction of the key neurophysiological flow biomarkers defined in the project specification ([`biomarker_plan.md`](file:///c:/Users/Sami/Desktop/Uni/vr-eeg-flow-classifier/biomarker_plan.md)):
+
+```mermaid
+graph LR
+    subgraph Preprocessing Target
+        P1["0.5-45 Hz Bandpass"]
+        P2["Dual-Stream Filtering"]
+        P3["ICA & mne-icalabel"]
+        P4["Deferred Interpolation"]
+        P5["Continuous Hilbert"]
+        P6["Baseline Subtraction"]
+    end
+
+    subgraph Target Biomarker
+        B1["Fmθ, SMR Alpha/Beta & 1/f Exponent"]
+        B2["PEN/N200 & P300 ERP Waves"]
+        B3["Prefrontal Shannon Entropy & LEAPD"]
+        B4["Bilateral Asymmetry (F3/F4, C3/C4)"]
+        B5["Frontal-Parietal PLV & Sensorimotor PAC"]
+        B6["Peak & GFP Amplitude Metrics"]
+    end
+
+    P1 --> B1
+    P2 --> B2
+    P3 --> B3
+    P4 --> B4
+    P5 --> B5
+    P6 --> B6
+```
+
+1. **Bandpass Filtering (0.5 – 45.0 Hz) $\rightarrow$ Spectral Power & 1/f Exponent**:
+   - *Target Biomarkers*: Frontal Midline Theta ($Fm\theta$, 4–8 Hz over `Fz/FCz`), SMR Alpha/Beta (8–30 Hz over `C3/C4`), Gamma (30–45 Hz), and 1/f spectral exponent (1–40 Hz).
+   - *Preprocessing Rationale*: 0.5 Hz lower cutoff preserves full theta/delta power without low-frequency DC drift, while 45 Hz upper cutoff eliminates 50/60 Hz powerline hum and high-frequency VR display noise.
+
+2. **Dual-Stream Filtering $\rightarrow$ Event-Related Potentials (PEN/N200 & P300)**:
+   - *Target Biomarkers*: Prediction Error Negativity ($PEN/N200$, 150–350 ms over `Fz/Cz`) and $P300$ (300–500 ms over `Pz`).
+   - *Preprocessing Rationale*: Fitting ICA on a 1.0 Hz high-passed copy yields optimal IC unmixing without attenuating slow cortical ERP waveforms ($< 1.0\text{ Hz}$) in the main 0.5 Hz filtered signal.
+
+3. **VR Strap & Facial Muscle IC Removal $\rightarrow$ Prefrontal Shannon Entropy**:
+   - *Target Biomarkers*: Prefrontal Shannon Entropy and LEAPD Index (`Fp1`, `Fp2`, `AF7`, `AF8`).
+   - *Preprocessing Rationale*: Prefrontal channels sit directly under VR headset padding and forehead straps, picking up heavy ocular blinks and frontalis muscle tension. `mne-icalabel` automated IC subtraction removes these artifacts, ensuring entropy measures *neural complexity* rather than VR strap tension.
+
+4. **Deferred Bad Channel Interpolation $\rightarrow$ Inter-Hemispheric Asymmetry**:
+   - *Target Biomarkers*: Left vs. Right Beta/Gamma Power Asymmetry (`F3/F4`, `C3/C4`, `P3/P4`).
+   - *Preprocessing Rationale*: Deferring interpolation until *after* ICA prevents rank deficiency. Interpolating prior to ICA would create artificial spatial dependencies across bilateral channels, distorting asymmetry ratio calculations.
+
+5. **Continuous Hilbert Transform $\rightarrow$ Functional Connectivity (PLV) & PAC**:
+   - *Target Biomarkers*: Frontal-Parietal Phase Locking Value (PLV in $\theta, \alpha$) and Sensorimotor Phase-Amplitude Coupling (PAC between $\beta$ phase and $\gamma$ amplitude).
+   - *Preprocessing Rationale*: Applying Hilbert transforms on continuous raw data before sliding-window segmentation avoids edge/truncation artifacts, providing clean phase difference estimates.
+
+6. **Pre-Stimulus Baseline Subtraction $\rightarrow$ ERP & GFP Amplitudes**:
+   - *Target Biomarkers*: ERP Window Means, Peak Amplitudes, and Global Field Power (GFP).
+   - *Preprocessing Rationale*: Subtracting the $-100\text{ ms}$ to $0\text{ ms}$ baseline mean per channel per trial eliminates trial-to-trial amplifier DC shifts, ensuring peak metrics reflect true event-locked cognitive responses.
+
+---
+
 > [!NOTE]  
 > All preprocessing scripts are modularized in the [`src/`](file:///c:/Users/Sami/Desktop/Uni/vr-eeg-flow-classifier/src/) directory and can be executed individually via command line (e.g. `python src/preprocessing.py --subject 02 --session EMS`) or integrated into automated pipeline execution.
+
