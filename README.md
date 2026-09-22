@@ -17,6 +17,7 @@ The ultimate long-term goal of this project is to create a real-time, closed-loo
 
 ## Directory Structure
 
+*   [docs/WALKTHROUGH.md](docs/WALKTHROUGH.md): Dedicated walkthrough and architectural breakdown comparing EEGNet to the legacy baseline.
 *   [docs/eegnet_vs_svm_comparison.md](docs/eegnet_vs_svm_comparison.md): Comprehensive benchmark report comparing the upgraded EEGNet against the legacy SVM baseline (+41.74% accuracy gain).
 *   [biomarker_plan.md](biomarker_plan.md): Scientific blueprint outlining the specific EEG biomarkers (Theta, SMR, Hemispheric Asymmetry, Shannon Entropy, and Network Connectivity).
 *   [technical_roadmap.md](technical_roadmap.md): Software engineering, signal processing, and ML roadmap for system integration.
