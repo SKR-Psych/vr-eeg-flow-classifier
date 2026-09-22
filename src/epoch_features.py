@@ -10,7 +10,21 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')
 
 from src.loader import load_bids_data
 from src.preprocessing import preprocess_raw
-from src.classifier import parse_desc
+def parse_desc(desc: str):
+    """
+    Parses key-value parameters from BIDS task annotation strings.
+    E.g. "box:spawned;condition:vibro;trial_nr:10;normal_or_conflict:normal"
+    """
+    parts = desc.split(';')
+    event_type = parts[0]
+    params = {}
+    for part in parts:
+        if ':' in part:
+            subparts = part.split(':', 1)
+            if len(subparts) == 2:
+                params[subparts[0]] = subparts[1]
+    return event_type, params
+
 
 def extract_event_epochs(raw: mne.io.Raw, event_target: str = 'box:touched', tmin: float = -0.1, tmax: float = 0.6, baseline: tuple = (-0.1, 0.0)) -> tuple:
     """
