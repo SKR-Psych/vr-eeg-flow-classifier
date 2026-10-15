@@ -5,6 +5,7 @@ import torch.nn.functional as F
 class Conv2dWithConstraint(nn.Conv2d):
     """
     Conv2d layer with max-norm constraint on weights (commonly used in EEGNet).
+    Constrains each individual filter's weight vector across kernel dimensions dim=(1, 2, 3).
     """
     def __init__(self, *args, max_norm: float = 1.0, **kwargs):
         super().__init__(*args, **kwargs)
@@ -13,7 +14,7 @@ class Conv2dWithConstraint(nn.Conv2d):
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         if self.max_norm is not None and self.training:
             with torch.no_grad():
-                norm = self.weight.norm(2, dim=0, keepdim=True)
+                norm = self.weight.norm(2, dim=(1, 2, 3), keepdim=True)
                 desired = torch.clamp(norm, max=self.max_norm)
                 self.weight.copy_(self.weight * (desired / (1e-8 + norm)))
         return super().forward(x)
@@ -21,6 +22,7 @@ class Conv2dWithConstraint(nn.Conv2d):
 class LinearWithConstraint(nn.Linear):
     """
     Linear layer with max-norm constraint on weights.
+    Constrains each output unit's incoming weight vector across input dimension dim=1.
     """
     def __init__(self, *args, max_norm: float = 0.25, **kwargs):
         super().__init__(*args, **kwargs)
@@ -29,7 +31,7 @@ class LinearWithConstraint(nn.Linear):
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         if self.max_norm is not None and self.training:
             with torch.no_grad():
-                norm = self.weight.norm(2, dim=0, keepdim=True)
+                norm = self.weight.norm(2, dim=1, keepdim=True)
                 desired = torch.clamp(norm, max=self.max_norm)
                 self.weight.copy_(self.weight * (desired / (1e-8 + norm)))
         return super().forward(x)
@@ -50,7 +52,8 @@ class EEGNet(nn.Module):
     dropout_rate : float, optional
         Dropout probability (default: 0.25).
     kernel_length : int, optional
-        Length of temporal kernel in Block 1 (default: 64, half sampling rate).
+        Length of temporal kernel in Block 1 (default: 250, corresponding to half sampling
+        rate fs // 2 at 500 Hz to capture oscillations down to 2-4 Hz including frontal Theta).
     F1 : int, optional
         Number of temporal filters (default: 8).
     D : int, optional
@@ -64,7 +67,7 @@ class EEGNet(nn.Module):
         channels: int = 64,
         samples: int = 350,
         dropout_rate: float = 0.25,
-        kernel_length: int = 64,
+        kernel_length: int = 250,
         F1: int = 8,
         D: int = 2,
         F2: int = 16
@@ -180,10 +183,43 @@ class EEGNet(nn.Module):
 
 if __name__ == "__main__":
     print("[*] Testing EEGNet PyTorch Model...")
+
+    # Test channels=64 and channels=32 with samples=350, verifying forward & backward pass in .train() mode
+    for ch in [64, 32]:
+        print(f"\n--- Testing EEGNet with {ch} channels ---")
+        model = EEGNet(n_classes=2, channels=ch, samples=350)
+        model.train()
+        sample_input = torch.randn(8, 1, ch, 350, requires_grad=True)
+        output = model(sample_input)
+        loss = output.sum()
+        loss.backward()
+
+        print(f"[+] Model instantiated successfully.")
+        print(f"    Input Shape:       {sample_input.shape}")
+        print(f"    Output Shape:      {output.shape}")
+        print(f"    Flatten Size:      {model.in_features}")
+        print(f"    Backward Pass:     OK (grad norm: {sample_input.grad.norm().item():.4f})")
+
+    # Verification of Max-Norm Constraints in .train() mode with large weights
+    print("\n--- Verifying Max-Norm Constraints with Large Initial Weights ---")
     model = EEGNet(n_classes=2, channels=64, samples=350)
-    sample_input = torch.randn(8, 1, 64, 350)
-    output = model(sample_input)
-    print(f"[+] Model instantiated successfully.")
-    print(f"    Input Shape:  {sample_input.shape}")
-    print(f"    Output Shape: {output.shape}")
-    print(f"    Flatten Size: {model.in_features}")
+    model.train()
+    with torch.no_grad():
+        model.depthwise_conv.weight.fill_(10.0)
+        model.classifier.weight.fill_(10.0)
+
+    # Trigger forward pass to enforce constraints
+    dummy_input = torch.randn(2, 1, 64, 350)
+    _ = model(dummy_input)
+
+    conv_norms = model.depthwise_conv.weight.norm(2, dim=(1, 2, 3))
+    lin_norms = model.classifier.weight.norm(2, dim=1)
+
+    max_conv_norm = conv_norms.max().item()
+    max_lin_norm = lin_norms.max().item()
+    print(f"    Max Conv2d Filter Norm:  {max_conv_norm:.4f} (Constraint: <= 1.0)")
+    print(f"    Max Linear Class Norm:   {max_lin_norm:.4f} (Constraint: <= 0.25)")
+
+    assert max_conv_norm <= 1.0 + 1e-5, f"Conv2d constraint failed: {max_conv_norm}"
+    assert max_lin_norm <= 0.25 + 1e-5, f"Linear constraint failed: {max_lin_norm}"
+    print("[+] All constraint and architectural verifications passed successfully!")

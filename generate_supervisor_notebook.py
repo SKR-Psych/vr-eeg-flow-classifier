@@ -550,7 +550,7 @@ The scatter plot illustrates how CSP spatial filters project the 64-channel volu
 While xDAWN and CSP manually engineer spatial filters, **EEGNet** (*Lawhern et al., 2018*) performs end-to-end representation learning directly on the raw $(N_{\\text{channels}} \\times N_{\\text{times}})$ voltage matrices.
 
 ### The EEGNet Architectural Sequence:
-1. **2D Temporal Convolution**: Kernels of size $(1, 64)$ slide along time, learning bandpass frequency filters without spatial mixing.
+1. **2D Temporal Convolution**: Kernels of size $(1, 250)$ slide along time (half sampling rate $f_s/2$ at 500 Hz), learning bandpass frequency filters without spatial mixing.
 2. **Depthwise Spatial Convolution**: Kernels of size $(N_{\\text{channels}}, 1)$ slide across electrodes, learning optimal spatial filter combinations for each temporal filter (analogous to automated CSP).
 3. **Separable Convolution**: Decouples spatial and temporal dimensions to reduce parameter count and prevent overfitting on small trial counts.
 4. **Max-Norm Weight Constraints**: Restricts kernel Frobenius norms to $\\le 1.0$ for robust generalization across non-stationary sessions."""))

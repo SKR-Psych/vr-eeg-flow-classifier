@@ -19,7 +19,7 @@
 
 ```mermaid
 graph TD
-    A["Raw EEG Epoch (1 x 64 x 350)<br/>-100ms to +600ms @ 500Hz"] --> B["Block 1: Temporal Conv (1 x 64)<br/>Learns digital bandpass frequency filters"]
+    A["Raw EEG Epoch (1 x 64 x 350)<br/>-100ms to +600ms @ 500Hz"] --> B["Block 1: Temporal Conv (1 x 250)<br/>Learns digital bandpass frequency filters (fs/2 @ 500Hz)"]
     B --> C["Batch Normalisation"]
     C --> D["Depthwise Spatial Conv (64 x 1)<br/>Learns spatial beamforming / CSP per band"]
     D --> E["Batch Normalisation + ELU + AvgPool (1 x 4) + Dropout(0.25)"]
@@ -29,13 +29,14 @@ graph TD
 ```
 
 ### Block 1 — Temporal & Spatial Filtering (Frequency + Topography)
-* **Temporal Convolution ($1 \times 64$ kernel, $F_1 = 8$ filters):**
+* **Temporal Convolution ($1 \times 250$ kernel, $F_1 = 8$ filters):**
+  * Set to half the sampling rate ($f_s / 2 = 250\text{ samples} = 500\text{ ms}$ at $500\text{ Hz}$) adhering to Lawhern et al. (2018).
   * Acts as a learnt digital filterbank across time without channel mixing.
-  * Captures frequency-specific oscillations (e.g. frontal Theta $4\text{–}8\text{ Hz}$, sensorimotor Alpha/SMR $8\text{–}12\text{ Hz}$, Beta $13\text{–}30\text{ Hz}$) directly from microvolt dynamics.
+  * Provides sufficient window length ($\ge 250\text{ ms}$) to resolve low-frequency oscillations down to frontal midline Theta ($4\text{–}8\text{ Hz}$, period $125\text{–}250\text{ ms}$) and slow ERP components, avoiding the physical frequency cutoff of shorter kernels (e.g. $64\text{ samples} = 128\text{ ms} \approx 7.8\text{ Hz}$ cutoff).
 * **Depthwise Spatial Convolution ($64 \times 1$ kernel, depth multiplier $D = 2$):**
   * Convolves spatially across all 64 scalp electrodes independently for each learnt temporal filter.
   * Mathematically equivalent to learning **spatial filters** (analogous to Common Spatial Patterns [CSP] or spatial beamforming) to isolate localised cortical dipole sources.
-  * Uses a **Max-Norm constraint ($\le 1.0$)** to prevent filter weight explosion in low-SNR environments.
+  * Uses a **Max-Norm constraint ($\le 1.0$)** across kernel dimensions $\text{dim}=(1, 2, 3)$ to constrain spatial electrode weights within each filter independently, preventing filter weight explosion in low-SNR environments.
 * **Average Pooling ($1 \times 4$) & Dropout ($p = 0.25$):**
   * Downsamples temporal resolution to build invariance against millisecond-scale phase shifts.
 
@@ -48,6 +49,7 @@ graph TD
 
 ### Classification Head — Calibrated Dense Linear Layer
 * **Max-Norm Constrained Linear Layer ($\le 0.25$):**
+  * Constrained across the input feature dimension ($\text{dim}=1$) for each class weight vector.
   * Flattens the low-dimensional latent space into a 2-class output ($P(\text{Flow})$ vs $P(\text{Non-Flow})$).
   * Trained with **dynamic class re-weighting** ($w_c = \frac{N_{\text{total}}}{2 \cdot N_c}$) and `ReduceLROnPlateau` to counter normal-to-conflict trial imbalance.
 
