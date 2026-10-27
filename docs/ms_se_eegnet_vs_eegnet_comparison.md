@@ -46,6 +46,8 @@ The table below summarizes empirical results from the benchmark on `sub-02` (dat
 
 ---
 
+---
+
 ## 3. Seed-by-Seed Empirical Performance (`sub-02`)
 
 To avoid seed selection bias, models were trained across 3 independent random seeds (50 epochs each, batch size 16, Adam with `ReduceLROnPlateau`, inverse class weights):
@@ -63,6 +65,26 @@ To avoid seed selection bias, models were trained across 3 independent random se
 
 > [!NOTE]
 > Under Seed 2026, MS-SE-EEGNet outperformed Vanilla EEGNet by **+2.96% in Balanced Accuracy** and **+7.5% in Recall**, demonstrating superior stability on harder initializations.
+
+---
+
+## 3.1 Multi-Subject Empirical Benchmark (5 Participants, 3,480 Total Trials)
+
+Data sourced directly from [`data/ds003846/derivatives/cohort_ms_se_vs_eegnet_comparison.csv`](../data/ds003846/derivatives/cohort_ms_se_vs_eegnet_comparison.csv):
+
+| Participant | Total Trials | Val Trials | Vanilla EEGNet Balanced Acc | MS-SE-EEGNet Balanced Acc | Acc Gain | EEGNet Recall | MS-SE Recall | Recall Gain | EEGNet F1 | MS-SE F1 | F1 Gain | EEGNet Latency | MS-SE Latency |
+| :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: |
+| `sub-02` | 897 | 180 | **91.48%** | 87.78% | -3.70% | 91.85% | **95.56%** | **+3.70%** | 0.943 | **0.945** | **+0.002** | 1.36 ms | 1.91 ms |
+| `sub-03` | 300 | 60 | **87.78%** | **87.78%** | 0.00% | **95.56%** | **95.56%** | 0.00% | **0.945** | **0.945** | 0.000 | 1.38 ms | 2.22 ms |
+| `sub-04` | 684 | 137 | **90.76%** | 88.81% | -1.96% | **84.47%** | 83.50% | -0.97% | **0.911** | 0.901 | -0.011 | 1.49 ms | 2.06 ms |
+| `sub-05` | 702 | 141 | **87.86%** | 85.52% | -2.34% | **92.38%** | 90.48% | -1.90% | **0.933** | 0.918 | -0.015 | 1.41 ms | 1.81 ms |
+| `sub-06` | 897 | 180 | **97.04%** | 94.07% | -2.96% | **96.30%** | 92.59% | -3.70% | **0.977** | 0.954 | -0.023 | 1.74 ms | 2.29 ms |
+| **5-Subject Mean** | **3,480 trials** | **698 trials** | **90.98%** | **88.79%** | **-2.19%** | **92.11%** | **91.54%** | **-0.57%** | **0.942** | **0.933** | **-0.009** | **1.48 ms** | **2.06 ms** |
+
+### Critical Takeaway from Multi-Subject Testing:
+* Both architectures consistently achieve **high accuracy (~89% to 91%)**, outperforming the legacy SVM baseline (~49.8%) by over +40 percentage points.
+* **Vanilla EEGNet maintains a slight statistical edge on mean balanced accuracy across the 5 participants (90.98% vs. 88.79%, a +2.19% difference).**
+* This confirms our architectural recommendation: **do not discard Vanilla EEGNet**. Instead, retain Vanilla EEGNet as the primary, ultra-streamlined baseline and support MS-SE-EEGNet as an attention-augmented alternative.
 
 ---
 
