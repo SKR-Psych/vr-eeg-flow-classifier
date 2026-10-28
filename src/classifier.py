@@ -16,7 +16,7 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')
 from src.loader import load_bids_data
 from src.preprocessing import preprocess_raw
 from src.epoch_features import extract_event_epochs
-from src.eegnet import EEGNet
+from src.eegnet import EEGNet, MS_SE_EEGNet
 
 def parse_desc(desc: str):
     """
@@ -42,10 +42,11 @@ def train_eegnet_classifier(
     max_epochs: int = 60,
     batch_size: int = 16,
     lr: float = 1e-3,
-    dropout_rate: float = 0.25
+    dropout_rate: float = 0.25,
+    model_type: str = 'eegnet'
 ) -> tuple:
     """
-    Trains and calibrates an EEGNet deep neural network classifier on event-locked EEG epochs.
+    Trains and calibrates an EEGNet or MS-SE-EEGNet deep neural network classifier on event-locked EEG epochs.
 
     Parameters
     ----------
@@ -94,7 +95,10 @@ def train_eegnet_classifier(
     train_loader = DataLoader(train_ds, batch_size=batch_size, shuffle=True)
 
     n_samples, _, channels, samples = X_train.shape
-    model = EEGNet(n_classes=2, channels=channels, samples=samples, dropout_rate=dropout_rate).to(device)
+    if model_type.lower() in ['ms_se_eegnet', 'ms-se-eegnet', 'msseeegnet']:
+        model = MS_SE_EEGNet(n_classes=2, channels=channels, samples=samples, dropout_rate=dropout_rate).to(device)
+    else:
+        model = EEGNet(n_classes=2, channels=channels, samples=samples, dropout_rate=dropout_rate).to(device)
 
     # Balanced Class Weighting to combat class imbalance
     n_0 = np.sum(y_train == 0)
@@ -171,27 +175,28 @@ def train_eegnet_classifier(
 
     return model, norm_params, metrics
 
-def save_eegnet_checkpoint(model: EEGNet, norm_params: dict, save_path: str, extra_meta: dict = None):
+def save_eegnet_checkpoint(model: nn.Module, norm_params: dict, save_path: str, extra_meta: dict = None):
     """
-    Saves a self-contained calibrated EEGNet model checkpoint (.pt).
+    Saves a self-contained calibrated EEGNet or MS-SE-EEGNet model checkpoint (.pt).
     """
     os.makedirs(os.path.dirname(os.path.abspath(save_path)), exist_ok=True)
+    arch_name = 'MS_SE_EEGNet' if isinstance(model, MS_SE_EEGNet) else 'EEGNet'
     checkpoint = {
         'model_state_dict': model.state_dict(),
         'channels': norm_params['channels'],
         'samples': norm_params['samples'],
         'norm_mean': norm_params['mean'],
         'norm_std': norm_params['std'],
-        'architecture': 'EEGNet',
+        'architecture': arch_name,
         'sfreq': 500.0,
         'metadata': extra_meta or {}
     }
     torch.save(checkpoint, save_path)
-    print(f"[+] Successfully exported calibrated EEGNet checkpoint to: {save_path}")
+    print(f"[+] Successfully exported calibrated {arch_name} checkpoint to: {save_path}")
 
 def load_eegnet_checkpoint(checkpoint_path: str, device: torch.device = None) -> tuple:
     """
-    Loads an exported EEGNet checkpoint and reconstructs model and normalization tensors.
+    Loads an exported EEGNet or MS-SE-EEGNet checkpoint and reconstructs model and normalization tensors.
     """
     if device is None:
         device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
@@ -199,8 +204,13 @@ def load_eegnet_checkpoint(checkpoint_path: str, device: torch.device = None) ->
     checkpoint = torch.load(checkpoint_path, map_location=device)
     channels = checkpoint['channels']
     samples = checkpoint['samples']
-    
-    model = EEGNet(n_classes=2, channels=channels, samples=samples).to(device)
+    architecture = checkpoint.get('architecture', 'EEGNet')
+
+    if architecture == 'MS_SE_EEGNet':
+        model = MS_SE_EEGNet(n_classes=2, channels=channels, samples=samples).to(device)
+    else:
+        model = EEGNet(n_classes=2, channels=channels, samples=samples).to(device)
+
     model.load_state_dict(checkpoint['model_state_dict'])
     model.eval()
 
@@ -214,11 +224,12 @@ def train_and_export_subject(
     bids_root: str = "data/ds003846",
     output_dir: str = "data/ds003846/derivatives",
     sessions: list = None,
-    max_epochs: int = 60
+    max_epochs: int = 60,
+    model_type: str = "eegnet"
 ):
     """
     Loads all sessions for a subject, segments event-locked epochs, performs chronological
-    split, trains EEGNet, and saves 'sub-<id>_eegnet.pt'.
+    split, trains EEGNet or MS-SE-EEGNet, and saves the calibrated model checkpoint.
     """
     if sessions is None:
         sessions = ["EMS", "Vibro", "Visual"]
@@ -274,32 +285,37 @@ def train_and_export_subject(
         epochs_val=epochs_val,
         y_val=y_val,
         device=device,
-        max_epochs=max_epochs
+        max_epochs=max_epochs,
+        model_type=model_type
     )
 
     print(f"[+] Validation Balanced Accuracy: {metrics['balanced_accuracy']:.2%}")
     print(f"    Precision: {metrics.get('precision', 0):.3f} | Recall: {metrics.get('recall', 0):.3f} | F1: {metrics.get('f1_score', 0):.3f}")
 
-    save_path = os.path.join(output_dir, f"{sub_id}_eegnet.pt")
+    model_suffix = "ms_se_eegnet" if model_type.lower() in ['ms_se_eegnet', 'ms-se-eegnet', 'msseeegnet'] else "eegnet"
+    save_path = os.path.join(output_dir, f"{sub_id}_{model_suffix}.pt")
     save_eegnet_checkpoint(model, norm_params, save_path, extra_meta={
         'subject_id': sub_id,
         'val_balanced_accuracy': metrics['balanced_accuracy'],
+        'model_type': model_type,
         'n_train_trials': len(epochs_train),
         'n_val_trials': len(epochs_val)
     })
     return save_path, metrics
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Train & Calibrate EEGNet Flow Classifier")
+    parser = argparse.ArgumentParser(description="Train & Calibrate Flow Classifier (EEGNet / MS-SE-EEGNet)")
     parser.add_argument("--subject", type=str, default="02", help="Subject ID (e.g. 02)")
     parser.add_argument("--bids-root", type=str, default="data/ds003846", help="Path to BIDS dataset")
     parser.add_argument("--output-dir", type=str, default="data/ds003846/derivatives", help="Output directory for .pt models")
     parser.add_argument("--epochs", type=int, default=60, help="Training epochs")
+    parser.add_argument("--model-type", type=str, default="eegnet", choices=["eegnet", "ms_se_eegnet"], help="Architecture to train (default: eegnet)")
     args = parser.parse_args()
 
     train_and_export_subject(
         subject=args.subject,
         bids_root=args.bids_root,
         output_dir=args.output_dir,
-        max_epochs=args.epochs
+        max_epochs=args.epochs,
+        model_type=args.model_type
     )
