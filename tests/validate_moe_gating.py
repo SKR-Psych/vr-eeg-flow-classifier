@@ -46,8 +46,8 @@ def train_single_expert(
     y_train: torch.Tensor,
     X_val: torch.Tensor,
     y_val: np.ndarray,
-    max_epochs: int = 40,
-    batch_size: int = 32,
+    max_epochs: int = 25,
+    batch_size: int = 64,
     augment_artifacts: bool = False,
     seed: int = 42
 ) -> nn.Module:
@@ -64,8 +64,9 @@ def train_single_expert(
     class_weights = torch.tensor([w0, w1], dtype=torch.float32, device=device)
 
     criterion = nn.CrossEntropyLoss(weight=class_weights)
-    optimizer = optim.Adam(model.parameters(), lr=1e-3, weight_decay=1e-3)
-    scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='max', factor=0.5, patience=4)
+    optimizer = optim.Adam(model.parameters(), lr=2e-3, weight_decay=1e-3)
+    scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='max', factor=0.5, patience=3)
+
 
     if augment_artifacts:
         X_train_noisy_bank, _ = generate_synthetic_eeg_artifacts(
@@ -123,9 +124,11 @@ def train_joint_moe(
     y_train: torch.Tensor,
     X_val: torch.Tensor,
     y_val: np.ndarray,
-    max_epochs: int = 40,
-    batch_size: int = 32,
-    seed: int = 42
+    max_epochs: int = 25,
+    batch_size: int = 64,
+    seed: int = 42,
+    pretrained_eegnet: nn.Module = None,
+    pretrained_msse: nn.Module = None
 ) -> EEGMoEClassifier:
     torch.manual_seed(seed)
     np.random.seed(seed)
@@ -133,6 +136,10 @@ def train_joint_moe(
     device = torch.device('cpu')
 
     model = EEGMoEClassifier(n_classes=2, channels=channels, samples=samples, dropout_rate=0.25).to(device)
+    if pretrained_eegnet is not None:
+        model.expert_eegnet.load_state_dict(pretrained_eegnet.state_dict())
+    if pretrained_msse is not None:
+        model.expert_msse.load_state_dict(pretrained_msse.state_dict())
 
     # Calibrate gate feature normalization on clean + synthetic noisy training epochs
     with torch.no_grad():
@@ -152,8 +159,14 @@ def train_joint_moe(
     task_criterion = nn.CrossEntropyLoss(weight=class_weights)
     gate_criterion = nn.CrossEntropyLoss()
 
-    optimizer = optim.Adam(model.parameters(), lr=1e-3, weight_decay=1e-3)
-    scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='max', factor=0.5, patience=4)
+    optimizer = optim.Adam([
+        {'params': model.expert_eegnet.parameters(), 'lr': 5e-4},
+        {'params': model.expert_msse.parameters(), 'lr': 5e-4},
+        {'params': model.gate.parameters(), 'lr': 3e-3},
+        {'params': [model.log_temp_eegnet, model.log_temp_msse], 'lr': 5e-3}
+    ], weight_decay=1e-3)
+    scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='max', factor=0.5, patience=3)
+
 
     X_train_noisy_bank, _ = generate_synthetic_eeg_artifacts(
         X_train, artifact_mode="mixed", severity=1.05, rng=rng
@@ -403,14 +416,19 @@ def run_validation_suite():
 
         # 1. Train Standalone Vanilla EEGNet (Clean Baseline)
         eegnet = EEGNet(n_classes=2, channels=channels, samples=samples, dropout_rate=0.25)
-        eegnet = train_single_expert(eegnet, X_train, y_train, X_val_clean, y_val, max_epochs=40, augment_artifacts=False, seed=42)
+        eegnet = train_single_expert(eegnet, X_train, y_train, X_val_clean, y_val, max_epochs=25, batch_size=64, augment_artifacts=False, seed=42)
 
         # 2. Train Standalone MS-SE-EEGNet (Artifact-Augmented Specialist)
         msse = MS_SE_EEGNet(n_classes=2, channels=channels, samples=samples, dropout_rate=0.25)
-        msse = train_single_expert(msse, X_train, y_train, X_val_clean, y_val, max_epochs=40, augment_artifacts=True, seed=42)
+        msse = train_single_expert(msse, X_train, y_train, X_val_clean, y_val, max_epochs=25, batch_size=64, augment_artifacts=True, seed=42)
 
-        # 3. Train Bidirectional Joint MoE Classifier
-        moe = train_joint_moe(channels, samples, X_train, y_train, X_val_clean, y_val, max_epochs=40, seed=42)
+        # 3. Train Bidirectional Joint MoE Classifier (co-adapting experts + gate + calibration temperatures)
+        moe = train_joint_moe(
+            channels, samples, X_train, y_train, X_val_clean, y_val,
+            max_epochs=18, batch_size=64, seed=42,
+            pretrained_eegnet=eegnet, pretrained_msse=msse
+        )
+
 
         # Create validation test regimes: Clean, Parkinsonian Tremor (4-6Hz + 8-12Hz), VR Jerk/EMG, and Mixed
         rng_val = np.random.default_rng(999)
@@ -524,11 +542,12 @@ def run_validation_suite():
         }
         cohort_rows.append(row)
 
-        print(f"    [Clean Flow Acc]   EEGNet: {acc_eeg_clean:.2%} | MS-SE: {acc_msse_clean:.2%} | MoE: {acc_moe_clean:.2%}")
-        print(f"    [Noisy Flow Acc]   EEGNet: {acc_eeg_noisy:.2%} | MS-SE: {acc_msse_noisy:.2%} | MoE: {acc_moe_noisy:.2%} (Gain vs EEGNet: {acc_moe_noisy - acc_eeg_noisy:+.2%})")
-        print(f"    [Gate Partition]   Acc: {gate_partition_acc:.2%} (AUC: {gate_roc_auc:.3f}) | Clean->EEGNet: {route_clean_to_eegnet:.1%} | Tremor->MS-SE: {route_tremor_to_msse:.1%} | Jerk->MS-SE: {route_jerk_to_msse:.1%}")
-        print(f"    [Bidir Recovery]   Legacy 7s One-Way Recovery: {legacy_recovery_rate:.1%} | MoE Bidirectional Recovery: {moe_recovery_rate:.1%}")
-        print(f"    [P(Flow) Drift]    Uncalibrated Hard Switch Drift: {uncalibrated_switch_drift:.4f} | Calibrated MoE Drift: {calibrated_moe_drift:.4f} | Latency: {lat_moe:.2f} ms ({elapsed:.1f}s)")
+        print(f"    [Clean Flow Acc]   EEGNet: {acc_eeg_clean:.2%} | MS-SE: {acc_msse_clean:.2%} | MoE: {acc_moe_clean:.2%}", flush=True)
+        print(f"    [Noisy Flow Acc]   EEGNet: {acc_eeg_noisy:.2%} | MS-SE: {acc_msse_noisy:.2%} | MoE: {acc_moe_noisy:.2%} (Gain vs EEGNet: {acc_moe_noisy - acc_eeg_noisy:+.2%})", flush=True)
+        print(f"    [Gate Partition]   Acc: {gate_partition_acc:.2%} (AUC: {gate_roc_auc:.3f}) | Clean->EEGNet: {route_clean_to_eegnet:.1%} | Tremor->MS-SE: {route_tremor_to_msse:.1%} | Jerk->MS-SE: {route_jerk_to_msse:.1%}", flush=True)
+        print(f"    [Bidir Recovery]   Legacy 7s One-Way Recovery: {legacy_recovery_rate:.1%} | MoE Bidirectional Recovery: {moe_recovery_rate:.1%}", flush=True)
+        print(f"    [P(Flow) Drift]    Uncalibrated Hard Switch Drift: {uncalibrated_switch_drift:.4f} | Calibrated MoE Drift: {calibrated_moe_drift:.4f} | Latency: {lat_moe:.2f} ms ({elapsed:.1f}s)", flush=True)
+
 
     df_cohort = pd.DataFrame(cohort_rows)
     cohort_csv = os.path.join(derivatives_dir, "moe_gating_validation_results.csv")
