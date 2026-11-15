@@ -15,6 +15,8 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')
 
 from src.loader import load_bids_data
 from src.classifier import load_eegnet_checkpoint
+from src.eegnet import EEGMoEClassifier
+
 
 def calibrate_ica(raw: mne.io.Raw, calibration_duration: float = 60.0) -> ICA:
     """
@@ -136,13 +138,21 @@ def simulate_realtime_eegnet_stream(
     if max_steps is not None:
         time_steps = time_steps[:max_steps]
 
-    print("\n" + "="*70)
-    print("=== STEP 3: Real-Time Stream Simulation (EEGNet Deep Learning) ===")
-    print("="*70)
+    is_moe = isinstance(model, EEGMoEClassifier)
+    if is_moe:
+        model.reset_stream_state()
+
+    print("\n" + "="*92)
+    print("=== STEP 3: Real-Time Stream Simulation (EEGNet / Bidirectional MoE) ===")
+    print("="*92)
     print(f"[*] Simulating real-time EEG stream (window={window_len}s, pad={pad_len}s, step={step}s)")
     print(f"[*] Bayesian Smoothing alpha: {smoothing_alpha} | Total steps: {len(time_steps)}")
-    print(f"{'Time (s)':<10} | {'State':<12} | {'Raw P(Flow)':<12} | {'Smooth P(Flow)':<14} | {'Latency (ms)':<12}")
-    print("-" * 70)
+    if is_moe:
+        print(f"{'Time (s)':<10} | {'State':<10} | {'Raw P(Flow)':<12} | {'Smooth P(Flow)':<14} | {'Active Route':<14} | {'g(MS-SE)':<9} | {'Latency (ms)':<12}")
+        print("-" * 92)
+    else:
+        print(f"{'Time (s)':<10} | {'State':<12} | {'Raw P(Flow)':<12} | {'Smooth P(Flow)':<14} | {'Latency (ms)':<12}")
+        print("-" * 70)
 
     info_template = raw.info.copy()
     raw_data = raw.get_data()  # in standard SI units (Volts) for MNE filtering & ICA
@@ -192,9 +202,16 @@ def simulate_realtime_eegnet_stream(
 
         # 4. Neural Network Inference
         with torch.no_grad():
-            logits = model(tensor)
-            probs = torch.softmax(logits, dim=1).cpu().numpy()[0]
-            raw_flow_prob = float(probs[1])
+            if is_moe:
+                logits, gate_info = model(tensor, update_gate_state=True, return_gate_info=True)
+                probs = gate_info["combined_probs"].cpu().numpy()[0]
+                raw_flow_prob = float(probs[1])
+                g_msse = float(gate_info["g_msse"].cpu().item())
+                active_route = "MS-SE-EEGNet" if g_msse >= 0.5 else "EEGNet"
+            else:
+                logits = model(tensor)
+                probs = torch.softmax(logits, dim=1).cpu().numpy()[0]
+                raw_flow_prob = float(probs[1])
 
         # 5. Bayesian Temporal Smoothing: P_t = alpha * P_raw + (1 - alpha) * P_{t-1}
         smoothed_prob = smoothing_alpha * raw_flow_prob + (1.0 - smoothing_alpha) * smoothed_prob
@@ -204,7 +221,11 @@ def simulate_realtime_eegnet_stream(
         latency_ms = (loop_end - loop_start) * 1000.0
         latencies.append(latency_ms)
 
-        print(f"{t:<10.2f} | {predicted_state:<12} | {raw_flow_prob:<12.4f} | {smoothed_prob:<14.4f} | {latency_ms:<12.2f}")
+        if is_moe:
+            print(f"{t:<10.2f} | {predicted_state:<10} | {raw_flow_prob:<12.4f} | {smoothed_prob:<14.4f} | {active_route:<14} | {g_msse:<9.3f} | {latency_ms:<12.2f}")
+        else:
+            print(f"{t:<10.2f} | {predicted_state:<12} | {raw_flow_prob:<12.4f} | {smoothed_prob:<14.4f} | {latency_ms:<12.2f}")
+
 
     print("-" * 70)
     print("=== SUMMARY: Pipeline Performance ===")
