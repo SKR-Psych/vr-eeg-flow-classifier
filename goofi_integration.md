@@ -28,9 +28,10 @@ import torch
 from goofi.data import DataType
 from goofi.node import Node
 
-# Import EEGNet architecture from repository
-from src.eegnet import EEGNet
+# Import EEGNet and Bidirectional MoE architectures from repository
+from src.eegnet import EEGNet, MS_SE_EEGNet, EEGMoEClassifier
 from src.classifier import load_eegnet_checkpoint
+
 
 class EEGNetFlowClassifier(Node):
     @staticmethod
@@ -112,16 +113,25 @@ class EEGNetFlowClassifier(Node):
             pad_width = expected_samples - raw_arr.shape[1]
             raw_arr = np.pad(raw_arr, ((0, 0), (pad_width, 0)), mode='edge')
 
-        # 4. Neural Network Inference (< 3 ms)
+        # 4. Neural Network Inference (< 6 ms; supports EEGNet, MS-SE-EEGNet, and Bidirectional MoE)
         try:
             tensor = torch.tensor(raw_arr, dtype=torch.float32).unsqueeze(0).unsqueeze(0).to(self.device)
             # Apply training z-score standardization
             tensor = (tensor - self.norm_mean) / self.norm_std
 
             with torch.no_grad():
-                logits = self.model(tensor)
-                probs = torch.softmax(logits, dim=1).cpu().numpy()[0]
-                raw_flow_prob = float(probs[1])
+                if isinstance(self.model, EEGMoEClassifier):
+                    _, gate_info = self.model(tensor, update_gate_state=True, return_gate_info=True)
+                    probs = gate_info["combined_probs"].cpu().numpy()[0]
+                    raw_flow_prob = float(probs[1])
+                    g_msse = float(gate_info["g_msse"].cpu().item())
+                    active_expert = "MS_SE_EEGNet" if g_msse >= 0.5 else "EEGNet"
+                else:
+                    logits = self.model(tensor)
+                    probs = torch.softmax(logits, dim=1).cpu().numpy()[0]
+                    raw_flow_prob = float(probs[1])
+                    g_msse = 1.0 if isinstance(self.model, MS_SE_EEGNet) else 0.0
+                    active_expert = self.model.__class__.__name__
 
             # 5. Bayesian Temporal Smoothing
             self.smoothed_prob = alpha * raw_flow_prob + (1.0 - alpha) * self.smoothed_prob
@@ -131,11 +141,13 @@ class EEGNetFlowClassifier(Node):
             print(f"[EEGNetFlowClassifier] Inference error: {e}")
             return None
 
-        # 6. Return values packaged for goofi-pipe output ports
+        # 6. Return values packaged for goofi-pipe output ports (preserving downstream schema + routing metadata)
+        out_meta = {"active_expert": active_expert, "gate_weight_msse": g_msse}
         return {
-            "flow_probability": (np.array([self.smoothed_prob]), {}),
-            "flow_state": (state_label, {})
+            "flow_probability": (np.array([self.smoothed_prob]), out_meta),
+            "flow_state": (state_label, out_meta)
         }
+
 ```
 
 ---
