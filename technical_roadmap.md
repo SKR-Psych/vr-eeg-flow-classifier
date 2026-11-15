@@ -9,9 +9,10 @@ This document outlines the software engineering, signal processing, and machine 
 ### 1. Register Goofi-Pipe Node
 *   **Objective:** Integrate the pre-validation classifier pipeline into the active `goofi-pipe` environment.
 *   **Tasks:**
-    *   Copy the template code from [goofi_integration.md](file:///C:/Users/Sami/Desktop/Uni/vr-eeg-flow-classifier/goofi_integration.md) into your local `goofi-pipe` directory at `src/goofi/nodes/analysis/flowclassifier.py`.
+    *   Copy the template code from [goofi_integration.md](file:///C:/Users/Sami/Desktop/Uni/vr-eeg-flow-classifier/goofi_integration.md) into your local `goofi-pipe` directory at `src/goofi/nodes/analysis/eegnet_flowclassifier.py`.
     *   Register the node within the `goofi/nodes/__init__.py` (or corresponding node registry file) under the `analysis` category.
-    *   Verify that the node dynamically loads the correct subject model (e.g. `sub-02_calibrated_classifier.joblib`) from your derivatives folder based on a node parameter or subject ID input.
+    *   Verify that the node dynamically loads the calibrated PyTorch subject checkpoint (`sub-02_eegnet.pt`, `sub-02_ms_se_eegnet.pt`, or `sub-02_moe_eegnet.pt`) from your derivatives folder based on the node parameter.
+
 
 ### 2. Live LSL Stream Validation
 *   **Objective:** Test the closed-loop system latency under simulated live streaming conditions.
