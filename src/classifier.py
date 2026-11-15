@@ -403,23 +403,36 @@ def train_moe_classifier(
     best_state_dict = None
     best_metrics = {}
 
+    # Pre-generate paired artifact-augmented training dataset so epoch loop is pure PyTorch tensor math
+    X_train_noisy_bank, _ = generate_synthetic_eeg_artifacts(
+        X_train_clean, artifact_mode="mixed", severity=1.05, rng=rng
+    )
+    train_ds = TensorDataset(X_train_clean, X_train_noisy_bank, y_train_t)
+    train_loader = DataLoader(train_ds, batch_size=batch_size, shuffle=True)
+
     for epoch in range(max_epochs):
         model.train()
-        for bx_clean, by in train_loader:
+        for bx_clean, bx_noisy_base, by in train_loader:
             bx_clean = bx_clean.to(device)
+            bx_noisy_base = bx_noisy_base.to(device)
             by = by.to(device)
             bsz = bx_clean.size(0)
 
-            # Create paired artifact-contaminated batch (tremor, jerk, EMG)
-            sev = float(rng.uniform(0.75, 1.35))
-            bx_noisy, _ = generate_synthetic_eeg_artifacts(bx_clean, artifact_mode="mixed", severity=sev, rng=rng)
+            # Fast on-device amplitude jitter of artifact perturbation
+            scale = 0.80 + 0.45 * torch.rand(bsz, 1, 1, 1, device=device)
+            bx_noisy = bx_clean + scale * (bx_noisy_base - bx_clean)
+
 
             optimizer.zero_grad()
 
-            # Forward pass on clean regime (target expert = 0: Vanilla EEGNet)
-            logits_clean, info_clean = model(bx_clean, return_gate_info=True)
-            # Forward pass on noisy regime (target expert = 1: MS-SE-EEGNet)
-            logits_noisy, info_noisy = model(bx_noisy, return_gate_info=True)
+            # Combine clean (regime=0) and artifact-contaminated (regime=1) batches into a single
+            # forward pass so in-place max-norm weight constraints in Conv2dWithConstraint / LinearWithConstraint
+            # execute once per backward pass.
+            bx_combined = torch.cat([bx_clean, bx_noisy], dim=0)
+            logits_all, info_all = model(bx_combined, return_gate_info=True)
+
+            logits_clean = logits_all[:bsz]
+            logits_noisy = logits_all[bsz:]
 
             # 1. Mixture task loss on both clean and noisy conditions
             loss_mix_clean = task_criterion(logits_clean, by)
@@ -427,21 +440,21 @@ def train_moe_classifier(
 
             # 2. Expert specialization losses:
             # Expert 0 (EEGNet) specializes on clean data; Expert 1 (MS-SE-EEGNet) trains on both clean & noisy
-            loss_e0_clean = task_criterion(info_clean["logits_eegnet"], by)
-            loss_e1_noisy = task_criterion(info_noisy["logits_msse"], by)
-            loss_e1_clean = task_criterion(info_clean["logits_msse"], by)
+            loss_e0_clean = task_criterion(info_all["logits_eegnet"][:bsz], by)
+            loss_e1_noisy = task_criterion(info_all["logits_msse"][bsz:], by)
+            loss_e1_clean = task_criterion(info_all["logits_msse"][:bsz], by)
 
             # 3. Bidirectional gate routing loss (0 = EEGNet for clean, 1 = MS-SE-EEGNet for noisy)
-            gate_targets_clean = torch.zeros(bsz, dtype=torch.long, device=device)
-            gate_targets_noisy = torch.ones(bsz, dtype=torch.long, device=device)
-            loss_gate = 0.5 * (
-                gate_criterion(info_clean["gate_logits"], gate_targets_clean)
-                + gate_criterion(info_noisy["gate_logits"], gate_targets_noisy)
-            )
+            gate_targets = torch.cat([
+                torch.zeros(bsz, dtype=torch.long, device=device),
+                torch.ones(bsz, dtype=torch.long, device=device)
+            ], dim=0)
+            loss_gate = gate_criterion(info_all["gate_logits"], gate_targets)
 
             # 4. Calibration alignment loss: keep P_0(Flow) and P_1(Flow) aligned on clean trials
             # so switching models does not shift the measured cognitive state probability
-            loss_align = F.mse_loss(info_clean["probs_eegnet"], info_clean["probs_msse"])
+            loss_align = F.mse_loss(info_all["probs_eegnet"][:bsz], info_all["probs_msse"][:bsz])
+
 
             total_loss = (
                 0.5 * (loss_mix_clean + loss_mix_noisy)

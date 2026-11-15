@@ -67,7 +67,14 @@ def train_single_expert(
     optimizer = optim.Adam(model.parameters(), lr=1e-3, weight_decay=1e-3)
     scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='max', factor=0.5, patience=4)
 
-    train_ds = TensorDataset(X_train, y_train)
+    if augment_artifacts:
+        X_train_noisy_bank, _ = generate_synthetic_eeg_artifacts(
+            X_train, artifact_mode="mixed", severity=1.05, rng=rng
+        )
+    else:
+        X_train_noisy_bank = X_train
+
+    train_ds = TensorDataset(X_train, X_train_noisy_bank, y_train)
     train_loader = DataLoader(train_ds, batch_size=batch_size, shuffle=True)
 
     best_acc = -1.0
@@ -75,20 +82,23 @@ def train_single_expert(
 
     for _ in range(max_epochs):
         model.train()
-        for bx, by in train_loader:
+        for bx_c, bx_n, by in train_loader:
             if augment_artifacts:
-                # Half clean, half artifact-augmented so MS-SE-EEGNet learns noise resilience
-                half = len(bx) // 2
+                half = len(bx_c) // 2
                 if half > 0:
-                    bx_noisy, _ = generate_synthetic_eeg_artifacts(
-                        bx[half:], artifact_mode="mixed", severity=float(rng.uniform(0.8, 1.3)), rng=rng
-                    )
-                    bx = torch.cat([bx[:half], bx_noisy], dim=0)
+                    scale = 0.80 + 0.45 * torch.rand(len(bx_c) - half, 1, 1, 1)
+                    bx_pert = bx_c[half:] + scale * (bx_n[half:] - bx_c[half:])
+                    bx = torch.cat([bx_c[:half], bx_pert], dim=0)
+                else:
+                    bx = bx_n
+            else:
+                bx = bx_c
             optimizer.zero_grad()
             logits = model(bx)
             loss = criterion(logits, by)
             loss.backward()
             optimizer.step()
+
 
         model.eval()
         with torch.no_grad():
@@ -145,7 +155,10 @@ def train_joint_moe(
     optimizer = optim.Adam(model.parameters(), lr=1e-3, weight_decay=1e-3)
     scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='max', factor=0.5, patience=4)
 
-    train_ds = TensorDataset(X_train, y_train)
+    X_train_noisy_bank, _ = generate_synthetic_eeg_artifacts(
+        X_train, artifact_mode="mixed", severity=1.05, rng=rng
+    )
+    train_ds = TensorDataset(X_train, X_train_noisy_bank, y_train)
     train_loader = DataLoader(train_ds, batch_size=batch_size, shuffle=True)
 
     X_val_noisy, _ = generate_synthetic_eeg_artifacts(
@@ -157,35 +170,39 @@ def train_joint_moe(
 
     for _ in range(max_epochs):
         model.train()
-        for bx_clean, by in train_loader:
+        for bx_clean, bx_noisy_base, by in train_loader:
             bsz = bx_clean.size(0)
-            sev = float(rng.uniform(0.75, 1.35))
-            bx_noisy, _ = generate_synthetic_eeg_artifacts(bx_clean, artifact_mode="mixed", severity=sev, rng=rng)
+            scale = 0.80 + 0.45 * torch.rand(bsz, 1, 1, 1)
+            bx_noisy = bx_clean + scale * (bx_noisy_base - bx_clean)
+
 
             optimizer.zero_grad()
-            logits_c, info_c = model(bx_clean, return_gate_info=True)
-            logits_n, info_n = model(bx_noisy, return_gate_info=True)
+            bx_combined = torch.cat([bx_clean, bx_noisy], dim=0)
+            logits_all, info_all = model(bx_combined, return_gate_info=True)
+
+            logits_c = logits_all[:bsz]
+            logits_n = logits_all[bsz:]
 
             loss_mix = 0.5 * (task_criterion(logits_c, by) + task_criterion(logits_n, by))
             loss_exp = 0.5 * (
-                task_criterion(info_c["logits_eegnet"], by)
-                + 0.65 * task_criterion(info_n["logits_msse"], by)
-                + 0.35 * task_criterion(info_c["logits_msse"], by)
+                task_criterion(info_all["logits_eegnet"][:bsz], by)
+                + 0.65 * task_criterion(info_all["logits_msse"][bsz:], by)
+                + 0.35 * task_criterion(info_all["logits_msse"][:bsz], by)
             )
 
-            gate_y0 = torch.zeros(bsz, dtype=torch.long)
-            gate_y1 = torch.ones(bsz, dtype=torch.long)
-            loss_gate = 0.5 * (
-                gate_criterion(info_c["gate_logits"], gate_y0)
-                + gate_criterion(info_n["gate_logits"], gate_y1)
-            )
+            gate_targets = torch.cat([
+                torch.zeros(bsz, dtype=torch.long),
+                torch.ones(bsz, dtype=torch.long)
+            ], dim=0)
+            loss_gate = gate_criterion(info_all["gate_logits"], gate_targets)
 
             # Calibration alignment on clean data so switching experts preserves P(Flow) scale
-            loss_align = F.mse_loss(info_c["probs_eegnet"], info_c["probs_msse"])
+            loss_align = F.mse_loss(info_all["probs_eegnet"][:bsz], info_all["probs_msse"][:bsz])
 
             loss = loss_mix + loss_exp + 0.5 * loss_gate + 1.2 * loss_align
             loss.backward()
             optimizer.step()
+
 
         model.eval()
         with torch.no_grad():
@@ -381,7 +398,8 @@ def run_validation_suite():
         y_val = labels[split_idx:]
 
         _, _, channels, samples = X_train.shape
-        print(f"\n---> Evaluating {sub_id} (Train={len(X_train)}, Val={len(X_val_clean)}, Ch={channels}, Samples={samples})")
+        print(f"\n---> Evaluating {sub_id} (Train={len(X_train)}, Val={len(X_val_clean)}, Ch={channels}, Samples={samples})", flush=True)
+
 
         # 1. Train Standalone Vanilla EEGNet (Clean Baseline)
         eegnet = EEGNet(n_classes=2, channels=channels, samples=samples, dropout_rate=0.25)
